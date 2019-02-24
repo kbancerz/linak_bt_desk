@@ -66,7 +66,7 @@ class BTLEConnection(btle.DefaultDelegate):
 
     def handleNotification(self, handle, data):
         """Handle Callback from a Bluetooth (GATT) request."""
-        _LOGGER.debug("Got notification from %s: %s", handle, codecs.encode(data, 'hex'))
+        _LOGGER.debug("Got notification from %s: %s", hex(handle), codecs.encode(data, 'hex'))
         if handle in self._callbacks:
             self._callbacks[handle](data)
 
@@ -82,7 +82,7 @@ class BTLEConnection(btle.DefaultDelegate):
     def make_request(self, handle, value, timeout=DEFAULT_TIMEOUT, with_response=True):
         """Write a GATT Command without callback - not utf-8."""
         try:
-            _LOGGER.debug("Writing %s to %s with with_response=%s", codecs.encode(value, 'hex'), handle, with_response)
+            _LOGGER.debug("Writing %s to %s with with_response=%s", codecs.encode(value, 'hex'), hex(handle), with_response)
             self._conn.writeCharacteristic(handle, value, withResponse=with_response)
             if timeout:
                 _LOGGER.debug("Waiting for notifications for %s", timeout)
@@ -94,7 +94,7 @@ class BTLEConnection(btle.DefaultDelegate):
     def read_characteristic(self, handle):
         """Read a GATT Characteristic."""
         try:
-            _LOGGER.debug("Reading %s", handle)
+            _LOGGER.debug("Reading %s", hex(handle))
             return self._conn.readCharacteristic(handle)
         except btle.BTLEException as ex:
             _LOGGER.error("Got exception from bluepy while making a request: %s", ex)
