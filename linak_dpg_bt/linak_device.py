@@ -81,6 +81,10 @@ class LinakDesk:
     def height_speed(self):
         return self._wait_for_variable('_height_speed')
 
+    @property
+    def is_running(self):
+        return self._running
+
     def _query_initial_data(self):
         with self._conn as conn:
             self._name = conn.read_characteristic(NAME_HANDLE)
