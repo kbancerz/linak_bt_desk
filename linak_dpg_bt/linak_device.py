@@ -51,6 +51,7 @@ class LinakDesk:
 
         self._target = None
         self._running = False
+        self._manual_height_change = False
         self._stop_timer = None
 
     @property
@@ -84,6 +85,14 @@ class LinakDesk:
     @property
     def is_running(self):
         return self._running
+
+    @property
+    def target_height(self):
+        if not self._manual_height_change:
+            return self._with_desk_offset(self._target).cm
+        else:
+            # height is being changed manually, so no target height
+            return None
 
     def _query_initial_data(self):
         with self._conn as conn:
@@ -138,15 +147,18 @@ class LinakDesk:
         self._move_to_raw(calculated_raw)
 
     def move_down(self):
+        self._manual_height_change = True
         self.move_to_cm(self._desk_offset.cm + HEIGHT_MIN)
 
     def move_up(self):
+        self._manual_height_change = True
         self.move_to_cm(self._desk_offset.cm + HEIGHT_MAX)
 
     def stop_movement(self):
         _LOGGER.debug("Move stopped")
         # send stop move
         self._running = False
+        self._manual_height_change = False
         self._stop_timer.cancel()
 
     def move_to_fav(self, fav):
