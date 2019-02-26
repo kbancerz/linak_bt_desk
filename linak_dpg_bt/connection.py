@@ -23,13 +23,13 @@ DPG_COMMAND_HANDLE = 0x0014
 class BTLEConnection(btle.DefaultDelegate):
     """Representation of a BTLE Connection."""
 
-    def __init__(self, mac):
+    def __init__(self, mac, callbacks):
         """Initialize the connection."""
         btle.DefaultDelegate.__init__(self)
 
         self._conn = None
         self._mac = mac
-        self._callbacks = {}
+        self._callbacks = callbacks
 
     def __enter__(self):
         """
@@ -37,24 +37,31 @@ class BTLEConnection(btle.DefaultDelegate):
         :rtype: btle.Peripheral
         :return:
         """
-        self._conn = btle.Peripheral()
-        self._conn.withDelegate(self)
-        _LOGGER.debug("Trying to connect to %s", self._mac)
-        try:
-            self._conn.connect(self._mac, addrType='random')
-        except btle.BTLEException as ex:
-            _LOGGER.debug("Unable to connect to the device %s, retrying: %s", self._mac, ex)
+        if self._conn is None:
+            self._conn = btle.Peripheral()
+            self._conn.withDelegate(self)
+            _LOGGER.debug("Trying to connect to %s", self._mac)
             try:
                 self._conn.connect(self._mac, addrType='random')
-            except Exception as ex2:
-                _LOGGER.error("Second connection try to %s failed: %s", self._mac, ex2)
-                raise
+            except btle.BTLEException as ex:
+                _LOGGER.debug("Unable to connect to the device %s, retrying: %s", self._mac, ex)
+                try:
+                    self._conn.connect(self._mac, addrType='random')
+                except Exception as ex2:
+                    _LOGGER.error("Second connection try to %s failed: %s", self._mac, ex2)
+                    raise
 
-        _LOGGER.debug("Connected to %s", self._mac)
+            _LOGGER.debug("Connected to %s", self._mac)
+
+            for handle, callback in self._callbacks.items():
+                self._subscribe_to_notification(handle, callback)
+            _LOGGER.debug("Callbacks registered")
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.disconnect()
+        if exc_type is not None:
+            self.disconnect()
 
     def __del__(self):
         self.disconnect()
@@ -75,9 +82,13 @@ class BTLEConnection(btle.DefaultDelegate):
         """Return the MAC address of the connected device."""
         return self._mac
 
-    def set_callback(self, handle, function):
+    def _set_callback(self, handle, function):
         """Set the callback for a Notification handle. It will be called with the parameter data, which is binary."""
         self._callbacks[handle] = function
+
+    def _subscribe_to_notification(self, notification_resp_handle, callback):
+        self.make_request(notification_resp_handle + 1, struct.pack('BB', 1, 0), with_response=True)
+        self._set_callback(notification_resp_handle, callback)
 
     def make_request(self, handle, value, timeout=DEFAULT_TIMEOUT, with_response=True):
         """Write a GATT Command without callback - not utf-8."""
@@ -99,10 +110,6 @@ class BTLEConnection(btle.DefaultDelegate):
         except btle.BTLEException as ex:
             _LOGGER.error("Got exception from bluepy while making a request: %s", ex)
             raise ex
-
-    def subscribe_to_notification(self, notification_handle, notification_resp_handle, callback):
-        self.make_request(notification_handle, struct.pack('BB', 1, 0), with_response=False)
-        self.set_callback(notification_resp_handle, callback)
 
     def dpg_command(self, command_type):
         value = DPGCommand.wrap_read_command(command_type)

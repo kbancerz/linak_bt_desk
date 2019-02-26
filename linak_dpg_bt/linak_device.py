@@ -1,24 +1,27 @@
 import logging
+from threading import Thread, Timer
 from time import sleep
 
 import linak_dpg_bt.constants as constants
 from .connection import BTLEConnection
-from .desk_mover import DeskMover
 from .desk_position import DeskPosition
-from .dpg_command import DPGCommand, DeskOffsetCommand, MemorySetting1Command, MemorySetting2Command
+from .dpg_command import DPGCommand, DeskOffsetCommand, MemorySetting2Command
 from .height_speed import HeightSpeed
 
 _LOGGER = logging.getLogger(__name__)
-
-DPG_COMMAND_NOTIFY_HANDLE = 0x0015  # Used for DPG Commands anwsers
 
 NAME_HANDLE = 0x0003
 
 PROP_GET_CAPABILITIES = 0x80
 PROP_DESK_OFFSET = 0x81
 PROP_USER_ID = 0x86
-PROP_MEMORY_POSITION_1 = 0x89
-PROP_MEMORY_POSITION_2 = 0x8a
+PROP_MEMORY_POSITION_1 = 0x0089
+PROP_MEMORY_POSITION_2 = 0x008a
+
+MOVE_TIMER_TIMEOUT = 30
+
+HEIGHT_MIN = 0
+HEIGHT_MAX = 64
 
 
 class DPGCommandReadError(Exception):
@@ -30,15 +33,25 @@ class WrongFavoriteNumber(Exception):
 
 
 class LinakDesk:
+
     def __init__(self, bdaddr):
+        self._handlers = {
+            constants.REFERENCE_OUTPUT_HANDLE: self._handle_reference_notification,
+            constants.DPG_COMMAND_HANDLE: self._handle_dpg_notification,
+        }
+
         self._bdaddr = bdaddr
-        self._conn = BTLEConnection(bdaddr)
+        self._conn = BTLEConnection(bdaddr, self._handlers)
 
         self._name = None
         self._desk_offset = None
         self._fav_position_1 = None
         self._fav_position_2 = None
         self._height_speed = None
+
+        self._target = None
+        self._running = False
+        self._stop_timer = None
 
     @property
     def name(self):
@@ -68,36 +81,69 @@ class LinakDesk:
     def height_speed(self):
         return self._wait_for_variable('_height_speed')
 
-    def read_dpg_data(self):
+    def _query_initial_data(self):
+        with self._conn as conn:
+            self._name = conn.read_characteristic(NAME_HANDLE)
+            conn.dpg_command(PROP_USER_ID)
+            conn.dpg_command(PROP_GET_CAPABILITIES)
+
+    def _query_desk_offset(self):
+        with self._conn as conn:
+            conn.dpg_command(PROP_DESK_OFFSET)
+
+    def _query_memory_positions(self):
+        with self._conn as conn:
+            self._fav_position_1 = None
+            self._fav_position_2 = None
+
+            conn.dpg_command(PROP_MEMORY_POSITION_1)
+            self._wait_for_variable('_fav_position_1')
+
+            conn.dpg_command(PROP_MEMORY_POSITION_2)
+            self._wait_for_variable('_fav_position_2')
+
+    def _query_height_speed(self):
+        with self._conn as conn:
+            self._height_speed = HeightSpeed.from_bytes(
+                conn.read_characteristic(constants.REFERENCE_OUTPUT_HANDLE))
+
+    def init(self):
         _LOGGER.debug("Querying the device..")
 
-        with self._conn as conn:
-            """ We need to query for name before doing anything, without it device doesnt respond """
-            self._name = conn.read_characteristic(NAME_HANDLE)
-
-            conn.subscribe_to_notification(DPG_COMMAND_NOTIFY_HANDLE, constants.DPG_COMMAND_HANDLE,
-                                           self._handle_dpg_notification)
-
-            # conn.dpg_command(PROP_USER_ID)
-            # conn.dpg_command(PROP_GET_CAPABILITIES)
-            conn.dpg_command(PROP_DESK_OFFSET)
-            conn.dpg_command(PROP_MEMORY_POSITION_1)
-            conn.dpg_command(PROP_MEMORY_POSITION_2)
-            self._height_speed = HeightSpeed.from_bytes(conn.read_characteristic(constants.REFERENCE_OUTPUT_HANDLE))
+        """ We need to query for name before doing anything, without it device doesnt respond """
+        self._query_initial_data()
+        self._query_desk_offset()
+        self._query_memory_positions()
+        self._query_height_speed()
 
     def __str__(self):
         return "[%s] Desk offset: %s, name: %s\nFav position1: %s, Fav position 2: %s Height with offset: %s" % (
             self._bdaddr,
             self.desk_offset.human_cm,
             self.name,
-            self._with_desk_offset(favorite_position_1).human_cm,
-            self._with_desk_offset(favorite_position_2).human_cm,
+            self._with_desk_offset(self.favorite_position_1).human_cm,
+            self._with_desk_offset(self.favorite_position_2).human_cm,
             self._with_desk_offset(self.height_speed.height).human_cm,
         )
+
+    def __repr__(self):
+        return self.__str__()
 
     def move_to_cm(self, cm):
         calculated_raw = DeskPosition.raw_from_cm(cm - self._desk_offset.cm)
         self._move_to_raw(calculated_raw)
+
+    def move_down(self):
+        self.move_to_cm(self._desk_offset.cm + HEIGHT_MIN)
+
+    def move_up(self):
+        self.move_to_cm(self._desk_offset.cm + HEIGHT_MAX)
+
+    def stop_movement(self):
+        _LOGGER.debug("Move stopped")
+        # send stop move
+        self._running = False
+        self._stop_timer.cancel()
 
     def move_to_fav(self, fav):
         if fav == 1:
@@ -139,18 +185,48 @@ class LinakDesk:
 
         if command.__class__ == DeskOffsetCommand:
             self._desk_offset = command.offset
-        elif command.__class__ == MemorySetting1Command:
-            self._fav_position_1 = command.offset
         elif command.__class__ == MemorySetting2Command:
-            self._fav_position_2 = command.offset
+            # DPG1M replies to queries for both memory positions with the same
+            # command type (0x07)
+            if self._fav_position_1 is None:
+                self._fav_position_1 = command.offset
+            else:
+                self._fav_position_2 = command.offset
+
+    def _handle_reference_notification(self, data):
+        self._height_speed = HeightSpeed.from_bytes(data)
+
+        _LOGGER.debug("Current relative height: %s, speed: %f", self._height_speed.height.human_cm, self._height_speed.speed.parsed)
+
+    def _send_move_to(self):
+        with self._conn as conn:
+            _LOGGER.debug("Sending move to: %s", self._target.human_cm)
+            conn.make_request(constants.MOVE_TO_HANDLE, self._target.bytes, timeout=None)
 
     def _move_to_raw(self, raw_value):
-        with self._conn as conn:
-            current_raw_height = self.current_height.raw
-            move_not_possible = (abs(raw_value - current_raw_height) < 10)
+        if self._running:
+            self.stop_movement()
 
-            if move_not_possible:
-                _LOGGER.debug("Move not possible, current raw height: %d", current_raw_height)
-                return
+        current_raw_height = self.current_height.raw
+        if abs(raw_value - current_raw_height) < 10:
+            _LOGGER.debug("Move not possible, current raw height: %d", current_raw_height)
+            return
 
-            DeskMover(conn, raw_value).start()
+        self._target = DeskPosition(raw_value)
+        self._running = True
+
+        self._stop_timer = Timer(MOVE_TIMER_TIMEOUT, self.stop_movement)
+        self._stop_timer.start()
+
+        _LOGGER.debug("Start move to: %s", self._target.human_cm)
+
+        Thread(target=self._process_movement).start()
+
+    def _process_movement(self):
+        while self._running:
+            self._send_move_to()
+            sleep(0.2)
+
+            self._query_height_speed()
+            if self.height_speed.speed.parsed < 0.001:
+                self.stop_movement()

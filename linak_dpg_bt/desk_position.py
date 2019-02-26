@@ -33,3 +33,7 @@ class DeskPosition:
     @property
     def human_cm(self):
         return "%d cm" % self.cm
+
+    @property
+    def bytes(self):
+        return struct.pack('<H', self.raw)
