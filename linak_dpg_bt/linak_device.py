@@ -95,7 +95,7 @@ class LinakDesk:
         direction_up = self._target > self.current_height
 
         if not self._manual_height_change:
-            return self._with_desk_offset(self._target).cm, direction_up
+            return self._target.cm, direction_up
         else:
             # height is being changed manually, so no target height
             return None, direction_up
