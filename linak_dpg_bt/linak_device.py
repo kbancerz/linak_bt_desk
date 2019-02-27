@@ -73,6 +73,8 @@ class LinakDesk:
 
     @property
     def current_height(self):
+        if not self._running:
+            self._query_height_speed()
         return self.height_speed.height
 
     @property
@@ -125,11 +127,6 @@ class LinakDesk:
         with self._conn as conn:
             self._height_speed = HeightSpeed.from_bytes(
                 conn.read_characteristic(REFERENCE_OUTPUT_HANDLE))
-
-    def query_height_speed(self):
-        if not self._running:
-            self._query_height_speed()
-            return self.current_height
 
     def init(self):
         _LOGGER.debug("Querying the device..")
@@ -234,7 +231,7 @@ class LinakDesk:
         if self._running:
             self.stop_movement()
 
-        current_raw_height = self.current_height.raw
+        current_raw_height = self.height_speed.height.raw
         if abs(raw_value - current_raw_height) < 10:
             _LOGGER.debug("Move not possible, current raw height: %d", current_raw_height)
             return
