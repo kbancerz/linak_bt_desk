@@ -126,6 +126,11 @@ class LinakDesk:
             self._height_speed = HeightSpeed.from_bytes(
                 conn.read_characteristic(REFERENCE_OUTPUT_HANDLE))
 
+    def query_height_speed(self):
+        if not self._running:
+            self._query_height_speed()
+            return self.current_height
+
     def init(self):
         _LOGGER.debug("Querying the device..")
 
