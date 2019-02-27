@@ -2,7 +2,8 @@ import logging
 from threading import Thread, Timer
 from time import sleep
 
-import linak_dpg_bt.constants as constants
+from .constants import DPG_COMMAND_HANDLE, REFERENCE_OUTPUT_HANDLE, \
+    MOVE_TO_HANDLE
 from .connection import BTLEConnection
 from .desk_position import DeskPosition
 from .dpg_command import DPGCommand, DeskOffsetCommand, MemorySetting2Command
@@ -36,8 +37,8 @@ class LinakDesk:
 
     def __init__(self, bdaddr):
         self._handlers = {
-            constants.REFERENCE_OUTPUT_HANDLE: self._handle_reference_notification,
-            constants.DPG_COMMAND_HANDLE: self._handle_dpg_notification,
+            REFERENCE_OUTPUT_HANDLE: self._handle_reference_notification,
+            DPG_COMMAND_HANDLE: self._handle_dpg_notification,
         }
 
         self._bdaddr = bdaddr
@@ -123,7 +124,7 @@ class LinakDesk:
     def _query_height_speed(self):
         with self._conn as conn:
             self._height_speed = HeightSpeed.from_bytes(
-                conn.read_characteristic(constants.REFERENCE_OUTPUT_HANDLE))
+                conn.read_characteristic(REFERENCE_OUTPUT_HANDLE))
 
     def init(self):
         _LOGGER.debug("Querying the device..")
@@ -222,7 +223,7 @@ class LinakDesk:
     def _send_move_to(self):
         with self._conn as conn:
             _LOGGER.debug("Sending move to: %s", self._target.human_cm)
-            conn.make_request(constants.MOVE_TO_HANDLE, self._target.bytes, timeout=None)
+            conn.make_request(MOVE_TO_HANDLE, self._target.bytes, timeout=None)
 
     def _move_to_raw(self, raw_value):
         if self._running:
