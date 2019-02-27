@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from threading import Thread, Timer
 from time import sleep
 
@@ -20,6 +21,7 @@ PROP_MEMORY_POSITION_1 = 0x0089
 PROP_MEMORY_POSITION_2 = 0x008a
 
 MOVE_TIMER_TIMEOUT = 30
+MIN_SEC_BETWEEN_QUERIES = 0.15
 
 HEIGHT_MIN = 0
 HEIGHT_MAX = 64
@@ -49,6 +51,7 @@ class LinakDesk:
         self._fav_position_1 = None
         self._fav_position_2 = None
         self._height_speed = None
+        self._last_height_query = None
 
         self._target = None
         self._running = False
@@ -124,9 +127,15 @@ class LinakDesk:
             self._wait_for_variable('_fav_position_2')
 
     def _query_height_speed(self):
+        if self._last_height_query is not None:
+            delta = (datetime.now() - self._last_height_query).total_seconds()
+            if delta < MIN_SEC_BETWEEN_QUERIES:
+                return
+
         with self._conn as conn:
             self._height_speed = HeightSpeed.from_bytes(
                 conn.read_characteristic(REFERENCE_OUTPUT_HANDLE))
+        self._last_height_query = datetime.now()
 
     def init(self):
         _LOGGER.debug("Querying the device..")
