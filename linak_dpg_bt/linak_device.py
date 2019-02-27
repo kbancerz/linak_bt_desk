@@ -92,7 +92,7 @@ class LinakDesk:
         if not self._running:
             return None, None
 
-        direction_up = self._target > self.current_height
+        direction_up = self._target.raw > self.current_height.raw
 
         if not self._manual_height_change:
             return self._target.cm, direction_up
